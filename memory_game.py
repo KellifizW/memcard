@@ -3,14 +3,12 @@ import feedparser
 import urllib.parse
 import requests
 import pandas as pd
-import json
-from datetime import datetime
-from bs4 import BeautifulSoup
 from io import BytesIO
+from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="亞太新聞抓取器", layout="wide", page_icon="🌏")
-st.title("🌏 亞太供應鏈新聞監控器（全 API 版）")
-st.markdown("Google News + NewsData.io + Currents + Marketaux | 已修正按鈕 + 中文")
+st.set_page_config(page_title="亞太宏觀與供應鏈監控器", layout="wide", page_icon="🌏")
+st.title("🌏 亞太科技大盤與供應鏈新聞前瞻系統")
+st.markdown("整合全球宏觀動向、亞太三大指數與半導體核心供應鏈，為美股預測提供先行指標。")
 
 # Sidebar
 with st.sidebar:
@@ -18,115 +16,125 @@ with st.sidebar:
     newsdata_key = st.text_input("NewsData.io", "pub_eead009008954d30b8242dc77816bf17", type="password")
     currents_key = st.text_input("Currents API", "zGbxOF-BIvNfS-jeV9WYrLDuRpcgUOBgZzRtqCBlHS8ncGtw", type="password")
     marketaux_key = st.text_input("Marketaux", "otCWokqLfT83SZYS42NoIujEc6b0cqOJdUosEZEp", type="password")
-    max_results = st.slider("每來源最多抓取", 5, 25, 10)
-
-KEYWORDS = ["TSMC", "台積電", "三星", "Samsung", "半導體", "HBM", "CoWoS"]
+    
+    st.header("⚙️ 抓取配置")
+    max_results = st.slider("每來源最多抓取", 5, 25, 12)
+    # 允許用戶切換模式，既能看大盤也能看個股
+    fetch_mode = st.radio("監控維度", ["全方位（宏觀大盤 + 核心供應鏈）", "僅限宏觀大盤", "僅限個股供應鏈"])
+    
+    # 讓 AI 更好分類的標籤設定
+    scrape_body = st.checkbox("深度分析（抓取新聞內文）", value=False, help="開啟後會減慢速度，但能提供完整內文供 AI 分析")
 
 def get_full_content(url):
+    """具備安全機制的內文抓取器"""
+    if not url or url.startswith("javascript"): return "無效網址"
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, timeout=10, headers=headers)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        r = requests.get(url, timeout=5, headers=headers) # 縮短 timeout 避免卡死
+        r.encoding = r.apparent_encoding
         soup = BeautifulSoup(r.text, 'html.parser')
-        text = " ".join([p.get_text(strip=True) for p in soup.find_all('p') if len(p.get_text(strip=True)) > 30])
-        return text[:1800] if text else "抓取失敗"
+        text = " ".join([p.get_text(strip=True) for p in soup.find_all('p') if len(p.get_text(strip=True)) > 25])
+        return text[:1500] if text else "未能提取到段落文本"
     except:
-        return "無法抓取內文"
+        return "暫時無法訪問該網站"
 
-def fetch_google_news(query, hl_cc, max_r):
+def fetch_google_news(query, hl_cc, max_r, category_label="未分類"):
     try:
         q = urllib.parse.quote(query)
         parts = hl_cc.split('_')
-        hl = parts[0]
-        gl = parts[1] if len(parts) > 1 else hl.split('-')[0].upper()
+        hl, gl = parts[0], parts[1]
         url = f"https://news.google.com/rss/search?q={q}&hl={hl}&gl={gl}"
         feed = feedparser.parse(url)
         arts = []
         for entry in feed.entries[:max_r]:
+            link = entry.link
             arts.append({
-                "source": "Google News",
-                "title": entry.title,
-                "link": entry.link,
-                "published": entry.get("published", "N/A"),
-                "summary": entry.get("summary", ""),
-                "full_content": get_full_content(entry.link)
+                "📊 維度": category_label,
+                "來源": "Google News",
+                "標題": entry.title,
+                "發布時間": entry.get("published", "N/A"),
+                "連結": link,
+                "摘要": entry.get("summary", ""),
+                "內文摘要": get_full_content(link) if scrape_body else "未啟用深度抓取"
             })
         return arts
     except Exception as e:
-        st.error(f"Google RSS 錯誤: {e}")
         return []
 
-def fetch_newsdata(key, q, country="tw", max_r=10):
-    if not key: return []
-    try:
-        url = f"https://newsdata.io/api/1/latest?apikey={key}&country={country}&q={urllib.parse.quote(q)}"
-        resp = requests.get(url, timeout=10)
-        data = resp.json()
-        arts = data.get("results", [])[:max_r]
-        for a in arts:
-            a["source"] = "NewsData.io"
-            a["full_content"] = get_full_content(a.get("link", ""))
-        return arts
-    except:
-        return [{"source": "NewsData.io", "title": "API 錯誤或額度已滿"}]
-
-def fetch_currents(key, keywords, language="zh", max_r=10):
-    if not key: return []
-    try:
-        url = "https://api.currentsapi.services/v1/search"
-        params = {"apiKey": key, "keywords": keywords, "language": language, "limit": max_r}
-        resp = requests.get(url, params=params, timeout=10)
-        data = resp.json()
-        arts = data.get("news", [])[:max_r]
-        for a in arts:
-            a["source"] = "Currents"
-            a["full_content"] = get_full_content(a.get("url", a.get("link", "")))
-        return arts
-    except:
-        return [{"source": "Currents", "title": "API 錯誤"}]
-
-def fetch_marketaux(key, ticker="2330.TW", max_r=10):
-    if not key: return []
-    try:
-        url = f"https://api.marketaux.com/v1/news/all?symbols={ticker}&limit={max_r}&api_token={key}"
-        resp = requests.get(url, timeout=10)
-        data = resp.json()
-        arts = data.get("data", [])[:max_r]
-        for a in arts:
-            a["source"] = "Marketaux"
-            a["full_content"] = get_full_content(a.get("url", ""))
-        return arts
-    except:
-        return [{"source": "Marketaux", "title": "API 錯誤"}]
-
 # 主按鈕
-if st.button("🚀 抓取所有來源新聞", type="primary"):
-    with st.spinner("正在抓取中，請稍候..."):
+if st.button("🚀 啟動全網前瞻數據監控", type="primary"):
+    with st.spinner("正在掃描亞太宏觀大盤與供應鏈數據..."):
         all_articles = []
         
-        # Google News
-        all_articles.extend(fetch_google_news("半導體 OR 台積電", "zh-TW_TW", max_results))
-        all_articles.extend(fetch_google_news("半導体 OR 東京エレクトロン", "ja_JP", max_results))
-        all_articles.extend(fetch_google_news("반도체 OR 삼성", "ko_KR", max_results))
+        # --- 定義多維度監控關鍵字 ---
+        # 1. 宏觀大盤與外匯（影響美股外資流向、市場情緒風險）
+        macro_tw = "外資 OR 加權指數 OR 央行 OR 新台幣"
+        macro_jp = "日經225 OR 日元 OR 日銀 OR 利差交易"  # 追蹤 Yen Carry Trade
+        macro_kr = "韓國綜合指數 OR 央行 OR 韓元"
         
-        # 其他 API
-        all_articles.extend(fetch_newsdata(newsdata_key, "台積電 OR 半導體", "tw", max_results))
-        all_articles.extend(fetch_currents(currents_key, "台積電 OR 半導體", "zh", max_results))
-        all_articles.extend(fetch_marketaux(marketaux_key, "2330.TW", max_results))
+        # 2. 整體產業板塊與先行指標（避免只限於台積電個股）
+        industry_tw = "半導體 OR 先進封裝 OR 矽晶圓 OR 電子代工"
+        industry_jp = "半導體材料 OR 東京威力科創 OR 光阻劑"
+        industry_kr = "記憶體現貨價 OR HBM OR 晶圓代工"
 
+        # --- 依據模式執行抓取 ---
+        if "宏觀大盤" in fetch_mode:
+            all_articles.extend(fetch_google_news(macro_tw, "zh-TW_TW", max_results, "亞太宏觀市場"))
+            all_articles.extend(fetch_google_news(macro_jp, "ja_JP", max_results, "亞太宏觀市場"))
+            all_articles.extend(fetch_google_news(macro_kr, "ko_KR", max_results, "亞太宏觀市場"))
+            
+        if "供應鏈" in fetch_mode:
+            all_articles.extend(fetch_google_news(industry_tw, "zh-TW_TW", max_results, "產業核心供應鏈"))
+            all_articles.extend(fetch_google_news(industry_jp, "ja_JP", max_results, "產業核心供應鏈"))
+            all_articles.extend(fetch_google_news(industry_kr, "ko_KR", max_results, "產業核心供應鏈"))
+
+        # --- 整合其餘專業 API ---
+        # 透過 NewsData 抓取台灣當日科技板塊大盤新聞
+        if newsdata_key and "供應鏈" in fetch_mode:
+            try:
+                url = f"https://newsdata.io/api/1/latest?apikey={newsdata_key}&country=tw&category=technology,business"
+                resp = requests.get(url, timeout=8).json()
+                for a in resp.get("results", [])[:max_results]:
+                    all_articles.append({
+                        "📊 維度": "產業核心供應鏈", "來源": "NewsData.io", "標題": a.get("title"),
+                        "發布時間": a.get("pubDate"), "連結": a.get("link"), "摘要": a.get("description", ""),
+                        "內文摘要": get_full_content(a.get("link")) if scrape_body else "未啟用深度抓取"
+                    })
+            except: pass
+
+        # Marketaux 保留作為權值股核心（例如美股科技股的錨點 2330）
+        if marketaux_key and "供應鏈" in fetch_mode:
+            try:
+                url = f"https://api.marketaux.com/v1/news/all?symbols=2330.TW,005930.KS&limit={max_results}&api_token={marketaux_key}"
+                resp = requests.get(url, timeout=8).json()
+                for a in resp.get("data", []):
+                    all_articles.append({
+                        "📊 維度": "個股關鍵錨點", "來源": "Marketaux", "標題": a.get("title"),
+                        "發布時間": a.get("published_at"), "連結": a.get("url"), "摘要": a.get("description"),
+                        "內文摘要": get_full_content(a.get("url")) if scrape_body else "未啟用深度抓取"
+                    })
+            except: pass
+
+        # --- 數據渲染 ---
         if all_articles:
             df = pd.DataFrame(all_articles)
-            display_cols = [c for c in ["source", "title", "published", "link", "summary"] if c in df.columns]
-            st.dataframe(df[display_cols], use_container_width=True)
+            
+            # 使用 Streamlit 索引過濾功能，讓使用者能按「維度」篩選
+            st.success(f"✅ 成功整合 {len(all_articles)} 則亞太前瞻多維度新聞！")
+            
+            # 分流顯示
+            tab1, tab2 = st.tabs(["📋 所有監控數據數據表", "🔍 分類多維度檢視"])
+            with tab1:
+                st.dataframe(df, use_container_width=True)
+            with tab2:
+                categories = df["📊 維度"].unique()
+                for cat in categories:
+                    with st.expander(f"📌 {cat} ({len(df[df['📊 維度']==cat])} 則)"):
+                        st.table(df[df["📊 維度"] == cat][["來源", "標題", "發布時間"]].head(10))
 
-            # 下載修正中文
+            # 下載模組
             csv_buffer = BytesIO()
             df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
-            csv_buffer.seek(0)
-            
-            st.download_button("📥 下載 CSV（繁體中文正常）", csv_buffer.getvalue(), "asia_news_full.csv", "text/csv")
-            
-            st.success(f"✅ 總抓取 {len(all_articles)} 則新聞")
+            st.download_button("📥 下載全維度前瞻數據 (CSV)", csv_buffer.getvalue(), f"asia_macro_tech_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
         else:
-            st.error("未抓到任何資料，請檢查網路或 API Key")
-
-st.caption("無限制模式 | 免費版有內容限制是正常現象")
+            st.error("未能獲取數據，請確認網絡或 API Key 有效性。")
