@@ -5,6 +5,7 @@ import requests
 import pandas as pd
 from io import BytesIO
 from bs4 import BeautifulSoup
+from datetime import datetime  # ✅ 修正：補上缺失的 datetime 引用
 
 st.set_page_config(page_title="亞太宏觀與供應鏈監控器", layout="wide", page_icon="🌏")
 st.title("🌏 亞太科技大盤與供應鏈新聞前瞻系統")
@@ -19,10 +20,7 @@ with st.sidebar:
     
     st.header("⚙️ 抓取配置")
     max_results = st.slider("每來源最多抓取", 5, 25, 12)
-    # 允許用戶切換模式，既能看大盤也能看個股
     fetch_mode = st.radio("監控維度", ["全方位（宏觀大盤 + 核心供應鏈）", "僅限宏觀大盤", "僅限個股供應鏈"])
-    
-    # 讓 AI 更好分類的標籤設定
     scrape_body = st.checkbox("深度分析（抓取新聞內文）", value=False, help="開啟後會減慢速度，但能提供完整內文供 AI 分析")
 
 def get_full_content(url):
@@ -30,7 +28,7 @@ def get_full_content(url):
     if not url or url.startswith("javascript"): return "無效網址"
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        r = requests.get(url, timeout=5, headers=headers) # 縮短 timeout 避免卡死
+        r = requests.get(url, timeout=5, headers=headers)
         r.encoding = r.apparent_encoding
         soup = BeautifulSoup(r.text, 'html.parser')
         text = " ".join([p.get_text(strip=True) for p in soup.find_all('p') if len(p.get_text(strip=True)) > 25])
@@ -67,30 +65,27 @@ if st.button("🚀 啟動全網前瞻數據監控", type="primary"):
         all_articles = []
         
         # --- 定義多維度監控關鍵字 ---
-        # 1. 宏觀大盤與外匯（影響美股外資流向、市場情緒風險）
         macro_tw = "外資 OR 加權指數 OR 央行 OR 新台幣"
-        macro_jp = "日經225 OR 日元 OR 日銀 OR 利差交易"  # 追蹤 Yen Carry Trade
+        macro_jp = "日經225 OR 日元 OR 日銀 OR 利差交易"  
         macro_kr = "韓國綜合指數 OR 央行 OR 韓元"
         
-        # 2. 整體產業板塊與先行指標（避免只限於台積電個股）
         industry_tw = "半導體 OR 先進封裝 OR 矽晶圓 OR 電子代工"
         industry_jp = "半導體材料 OR 東京威力科創 OR 光阻劑"
         industry_kr = "記憶體現貨價 OR HBM OR 晶圓代工"
 
         # --- 依據模式執行抓取 ---
-        if "宏觀大盤" in fetch_mode:
+        if "宏觀大盤" in fetch_mode or "全方位" in fetch_mode:
             all_articles.extend(fetch_google_news(macro_tw, "zh-TW_TW", max_results, "亞太宏觀市場"))
             all_articles.extend(fetch_google_news(macro_jp, "ja_JP", max_results, "亞太宏觀市場"))
             all_articles.extend(fetch_google_news(macro_kr, "ko_KR", max_results, "亞太宏觀市場"))
             
-        if "供應鏈" in fetch_mode:
+        if "供應鏈" in fetch_mode or "全方位" in fetch_mode:
             all_articles.extend(fetch_google_news(industry_tw, "zh-TW_TW", max_results, "產業核心供應鏈"))
             all_articles.extend(fetch_google_news(industry_jp, "ja_JP", max_results, "產業核心供應鏈"))
             all_articles.extend(fetch_google_news(industry_kr, "ko_KR", max_results, "產業核心供應鏈"))
 
         # --- 整合其餘專業 API ---
-        # 透過 NewsData 抓取台灣當日科技板塊大盤新聞
-        if newsdata_key and "供應鏈" in fetch_mode:
+        if newsdata_key and ("供應鏈" in fetch_mode or "全方位" in fetch_mode):
             try:
                 url = f"https://newsdata.io/api/1/latest?apikey={newsdata_key}&country=tw&category=technology,business"
                 resp = requests.get(url, timeout=8).json()
@@ -102,8 +97,7 @@ if st.button("🚀 啟動全網前瞻數據監控", type="primary"):
                     })
             except: pass
 
-        # Marketaux 保留作為權值股核心（例如美股科技股的錨點 2330）
-        if marketaux_key and "供應鏈" in fetch_mode:
+        if marketaux_key and ("供應鏈" in fetch_mode or "全方位" in fetch_mode):
             try:
                 url = f"https://api.marketaux.com/v1/news/all?symbols=2330.TW,005930.KS&limit={max_results}&api_token={marketaux_key}"
                 resp = requests.get(url, timeout=8).json()
@@ -119,13 +113,13 @@ if st.button("🚀 啟動全網前瞻數據監控", type="primary"):
         if all_articles:
             df = pd.DataFrame(all_articles)
             
-            # 使用 Streamlit 索引過濾功能，讓使用者能按「維度」篩選
             st.success(f"✅ 成功整合 {len(all_articles)} 則亞太前瞻多維度新聞！")
             
             # 分流顯示
             tab1, tab2 = st.tabs(["📋 所有監控數據數據表", "🔍 分類多維度檢視"])
             with tab1:
-                st.dataframe(df, use_container_width=True)
+                # ✅ 修正：將已廢棄的 use_container_width=True 替換為新版語法 width='stretch'
+                st.dataframe(df, width='stretch')
             with tab2:
                 categories = df["📊 維度"].unique()
                 for cat in categories:
