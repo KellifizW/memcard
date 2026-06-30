@@ -10,9 +10,18 @@ from io import BytesIO
 from bs4 import BeautifulSoup
 from datetime import datetime
 
-st.set_page_config(page_title="亞太股市大盤監控器 v10.0", layout="wide", page_icon="🌏")
-st.title("🌏 亞太股市大盤前瞻系統 (v10.0 - RPC 雙重序列化修復版)")
-st.markdown("當前核心聚焦：徹底修復 Google News 解密層，完善 `batchexecute` 協議逆向。")
+# --- 頁面基本配置 ---
+st.set_page_config(page_title="亞太股市大盤監控器 v10.1", layout="wide", page_icon="🌏")
+st.title("🌏 亞太股市大盤前瞻系統 (v10.1 - 完整穩定版)")
+st.markdown("當前核心功能：補齊頂層生命週期狀態，擊穿 Google News `batchexecute` 協議層。")
+
+# =====================================================================
+# ✨ 核心修復：初始化 Session State，徹底防止首次載入時的 KeyError 崩潰
+# =====================================================================
+if "all_articles" not in st.session_state:
+    st.session_state.all_articles = None
+if "api_statuses" not in st.session_state:
+    st.session_state.api_statuses = None
 
 # --- 側邊欄配置 ---
 with st.sidebar:
@@ -26,10 +35,10 @@ with st.sidebar:
     scrape_body = st.checkbox("深度內文追蹤與分析", value=True)
 
 # =====================================================================
-# 🔥 Google News 核心修復模組 (v10 雙重序列化防線)
+# 🔥 Google News 核心逆向模組 (v10+ 雙重序列化防線)
 # =====================================================================
 def deep_protocol_decode(google_url):
-    """【黑科技 RPC 解密 v10】精準擊穿 Google News 2026 混淆層"""
+    """【黑科技 RPC 解密】精準擊穿 Google News 混淆層，還原媒體原始網址"""
     log_chain = []
     log_chain.append("[INIT] 接收 RSS 網址")
     
@@ -44,7 +53,7 @@ def deep_protocol_decode(google_url):
             "Referer": "https://news.google.com/"
         }
         
-        # 1. 第一步：訪問 Google RSS 中繼網址，獲取 c-wiz 渲染上下文
+        # 1. 訪問 Google RSS 中繼網址，獲取 c-wiz 渲染上下文
         res = session.get(google_url, headers=headers, timeout=6)
         log_chain.append(f"[GET] 中繼網頁成功 (HTTP:{res.status_code})")
         
@@ -59,7 +68,6 @@ def deep_protocol_decode(google_url):
         # 3. 提取 data-p 屬性並將混淆字串安全還原
         match = re.search(r'data-p="([^"]+)"', res.text)
         if not match:
-            # 備用方案：解析 DOM 結構
             soup = BeautifulSoup(res.text, 'html.parser')
             cwiz = soup.select_one('c-wiz[data-p]')
             if cwiz:
@@ -72,28 +80,22 @@ def deep_protocol_decode(google_url):
 
         log_chain.append("[PARSE] 數據載荷提取成功")
 
-        # 4. 【核心優化】完美重建 Google 內層 RPC 陣列語法樹，避免字串替換出錯
-        # 將 %.@. 還原為標準 JSON 識別項，並解析成 Python List
+        # 4. 完美重建 Google 內層 RPC 陣列語法樹，避免字串替換出錯
         clean_json_str = data_p.replace('%.@.', '[')
-        # 補全由於 Google 格式截斷可能缺失的閉合括號
         open_brackets = clean_json_str.count('[')
         close_brackets = clean_json_str.count(']')
         if open_brackets > close_brackets:
             clean_json_str += ']' * (open_brackets - close_brackets)
             
         raw_payload_arr = json.loads(clean_json_str)
-        
-        # 根據 Google 2026 前端協議：重組 Fbv4je 請求參數形式
-        # 通常包含前置 ID 與網址編碼映射
         req_arr = [raw_payload_arr[0], raw_payload_arr[1] if len(raw_payload_arr) > 1 else []]
         
         # 進行第一層序列化
         req_str = json.dumps(req_arr, separators=(',', ':'))
-        
-        # 進行第二層封裝 (外層 Envelope 陣列)
+        # 進行第二層封裝 (外層 Envelope 陣列，指定呼叫 Fbv4je 函數)
         f_req = json.dumps([[["Fbv4je", req_str, None, "generic"]]], separators=(',', ':'))
         
-        # 5. 發送 POST 請求至 batchexecute
+        # 5. 發送 POST 請求至 batchexecute 端點
         post_url = 'https://news.google.com/_/DotsSplashUi/data/batchexecute'
         post_data = {
             'f.req': f_req,
@@ -109,7 +111,7 @@ def deep_protocol_decode(google_url):
             log_chain.append(f"[RPC_FAIL] 伺服器拒絕 (HTTP:{post_res.status_code})")
             return google_url, " | ".join(log_chain)
 
-        # 6. 解析 RPC 返回結果 (移除防注入前綴 )]}' )
+        # 6. 解析 RPC 返回結果 (移除防注入安全前綴 )]}' )
         resp_text = post_res.text.replace(")]}'\n", "").strip()
         outer_arr = json.loads(resp_text)
         
@@ -133,7 +135,7 @@ def deep_protocol_decode(google_url):
         return google_url, " | ".join(log_chain)
 
 def get_full_content_verbose(url):
-    """【乾淨文本提取器】"""
+    """【乾淨文本提取器】負責抓取解密後的第三方媒體正文"""
     if not url or "news.google.com" in url: 
         return "無內文", "[SPIDER_SKIP] 網址未成功解密，跳過爬取"
         
@@ -148,7 +150,8 @@ def get_full_content_verbose(url):
             return "無內文", f"[FAIL] 媒體拒絕 (HTTP:{r.status_code})"
             
         soup = BeautifulSoup(r.text, 'html.parser')
-        for s in soup(['script', 'style', 'nav', 'footer', 'iframe', 'header', 'noscript', 'form']): s.decompose()
+        for s in soup(['script', 'style', 'nav', 'footer', 'iframe', 'header', 'noscript', 'form']): 
+            s.decompose()
         
         paragraphs = [p.get_text(strip=True) for p in soup.find_all('p') if len(p.get_text(strip=True)) > 25]
         text = " ".join(paragraphs)
@@ -162,6 +165,7 @@ def get_full_content_verbose(url):
         return "無內文", f"[CRASH] 爬取異常: {error_msg}"
 
 def fetch_google_news(query, hl_cc, max_r, category_label):
+    """Google News RSS 下載與工作流分流控制器"""
     try:
         q = urllib.parse.quote(query)
         parts = hl_cc.split('_')
@@ -171,7 +175,7 @@ def fetch_google_news(query, hl_cc, max_r, category_label):
         for entry in feed.entries[:max_r]:
             raw_link = entry.link
             
-            # 調用 v10.0 解密引擎
+            # 呼叫大改版的解密與爬取引擎
             real_link, url_log = deep_protocol_decode(raw_link) if scrape_body else (raw_link, "未開啟解密")
             content_summary, spider_log = get_full_content_verbose(real_link) if scrape_body else ("未啟用", "未啟用")
             
@@ -207,8 +211,7 @@ if st.button("🚀 執行亞太三大股市大盤多維掃描", type="primary"):
         all_articles.extend(g_arts)
         api_statuses["Google News RSS"] = "🟢 OK" if g_arts else "🔴 抓取空值"
 
-        # (保留其餘已處理完畢、運作穩定的 API 模組快照)
-        # NewsData.io
+        # NewsData.io (兼容快照模組)
         if newsdata_key:
             try:
                 url = "https://newsdata.io/api/1/latest"
@@ -224,23 +227,39 @@ if st.button("🚀 執行亞太三大股市大盤多維掃描", type="primary"):
                             "內文摘要": content_summary, "🛠️ 解密日誌": "[API原生網址]", "🕷️ 爬蟲日誌": spider_log
                         })
                     api_statuses["NewsData.io API"] = f"🟢 OK ({len(nd_arts)} 則)"
-            except: pass
+            except: 
+                pass
 
+        # 將結果寫入 Session 狀態中
         st.session_state.all_articles = all_articles
         st.session_state.api_statuses = api_statuses
 
-# --- 數據渲染層 ---
-if st.session_state.api_statuses:
+# =====================================================================
+# 📊 數據渲染與輸出層
+# =====================================================================
+# 安全檢查：僅在 api_statuses 存在（即使用者已經點擊並執行過按鈕）時才渲染狀態面板
+if st.session_state.api_statuses is not None:
     st.subheader("🔌 系統連線狀態")
     cols = st.columns(2)
     cols[0].metric(label="Google News RSS 解密引擎", value=st.session_state.api_statuses.get("Google News RSS", "N/A"))
+    if "NewsData.io API" in st.session_state.api_statuses:
+        cols[1].metric(label="NewsData.io 數據通道", value=st.session_state.api_statuses.get("NewsData.io API"))
     st.markdown("---")
 
-if st.session_state.all_articles:
+if st.session_state.all_articles is not None:
     df = pd.DataFrame(st.session_state.all_articles)
-    st.success(f"✅ 成功獲取 {len(df)} 則台日韓大盤動態！")
-    st.dataframe(df, width='stretch')
+    if not df.empty:
+        st.success(f"✅ 成功獲取 {len(df)} 則台日韓大盤最新動態！")
+        st.dataframe(df, width='stretch')
 
-    csv_buffer = BytesIO()
-    df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
-    st.download_button("📥 下載完整數據 (CSV)", csv_buffer.getvalue(), f"asia_market_rpc_v10_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
+        # 下載緩衝區
+        csv_buffer = BytesIO()
+        df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+        st.download_button(
+            label="📥 下載完整數據 (CSV)",
+            data=csv_buffer.getvalue(),
+            file_name=f"asia_market_rpc_v10_1_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("💡 當前未發現相關市場數據，請確認連線狀態或嘗試更改關鍵字。")
