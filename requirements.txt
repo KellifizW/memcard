@@ -2,3 +2,4 @@ streamlit
 feedparser
 requests
 pandas
+beautifulsoup4
